@@ -1,7 +1,8 @@
-import React, { memo, useMemo } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, mono } from '../theme';
 import { Level, Market, OrderBook } from '../types';
+import { playSound } from '../utils/audio';
 import { fmt } from '../utils/format';
 
 interface RowProps {
@@ -13,13 +14,20 @@ interface RowProps {
   onPress?: (price: number) => void;
 }
 
-/** Re-renders only when its own level (or the depth scale) actually changes. */
+type BookFilter = 'both' | 'bids' | 'asks';
+
 const BookRow = memo(
   function BookRow({ level, side, maxTotal, priceDp, qtyDp, onPress }: RowProps) {
     const pct = maxTotal > 0 ? Math.min(100, (level.total / maxTotal) * 100) : 0;
     const isBid = side === 'bid';
     return (
-      <Pressable onPress={() => onPress?.(level.price)} style={styles.row}>
+      <Pressable
+        onPress={() => {
+          playSound('click');
+          onPress?.(level.price);
+        }}
+        style={styles.row}
+      >
         <View
           style={[
             styles.depthBar,
@@ -49,6 +57,7 @@ interface Props {
 }
 
 export const OrderBookView = memo(function OrderBookView({ market, book, onSelectPrice }: Props) {
+  const [filter, setFilter] = useState<BookFilter>('both');
   const { bids, asks } = book;
   const asksDesc = useMemo(() => [...asks].reverse(), [asks]);
 
@@ -66,21 +75,51 @@ export const OrderBookView = memo(function OrderBookView({ market, book, onSelec
   const bestAsk = asks[0].price;
   const mid = (bestBid + bestAsk) / 2;
   const spread = bestAsk - bestBid;
+  const spreadBps = ((spread / mid) * 10000).toFixed(1);
 
-  // Order Book Buy/Sell Pressure Ratio
+  // Depth Sentiment Ratio Calculation
   const totalBidsQty = bids.reduce((acc, b) => acc + b.qty, 0);
   const totalAsksQty = asks.reduce((acc, a) => acc + a.qty, 0);
   const totalDepth = totalBidsQty + totalAsksQty;
   const bidRatio = totalDepth > 0 ? (totalBidsQty / totalDepth) * 100 : 50;
   const askRatio = 100 - bidRatio;
 
+  const displayAsks = filter === 'bids' ? [] : filter === 'asks' ? asksDesc : asksDesc.slice(asksDesc.length - 8);
+  const displayBids = filter === 'asks' ? [] : filter === 'bids' ? bids : bids.slice(0, 8);
+
   return (
-    <View>
+    <View style={styles.container}>
+      {/* Top Controls: Filter & Sentiment */}
+      <View style={styles.topControlRow}>
+        <View style={styles.filterGroup}>
+          <Pressable
+            onPress={() => setFilter('both')}
+            style={[styles.filterBtn, filter === 'both' && styles.filterBtnActive]}
+          >
+            <Text style={[styles.filterText, filter === 'both' && styles.filterTextActive]}>Both</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setFilter('bids')}
+            style={[styles.filterBtn, filter === 'bids' && styles.filterBtnActive]}
+          >
+            <Text style={[styles.filterText, { color: colors.green }]}>Bids</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setFilter('asks')}
+            style={[styles.filterBtn, filter === 'asks' && styles.filterBtnActive]}
+          >
+            <Text style={[styles.filterText, { color: colors.red }]}>Asks</Text>
+          </Pressable>
+        </View>
+
+        <Text style={[styles.bpsText, mono]}>Spread: {spreadBps} bps</Text>
+      </View>
+
       {/* Depth Pressure Indicator Bar */}
       <View style={styles.pressureWrap}>
         <View style={styles.pressureLabels}>
           <Text style={[styles.pressureText, { color: colors.green }]}>Bids: {bidRatio.toFixed(1)}%</Text>
-          <Text style={styles.pressureTitle}>Order Book Depth Sentiment</Text>
+          <Text style={styles.pressureTitle}>Order Book Depth Ratio</Text>
           <Text style={[styles.pressureText, { color: colors.red }]}>Asks: {askRatio.toFixed(1)}%</Text>
         </View>
         <View style={styles.pressureBarTrack}>
@@ -95,7 +134,8 @@ export const OrderBookView = memo(function OrderBookView({ market, book, onSelec
         <Text style={[styles.headerCell, styles.right]}>Total</Text>
       </View>
 
-      {asksDesc.map((lvl, i) => (
+      {/* Asks (Sells) */}
+      {displayAsks.map((lvl, i) => (
         <BookRow
           key={`a${i}`}
           level={lvl}
@@ -107,14 +147,16 @@ export const OrderBookView = memo(function OrderBookView({ market, book, onSelec
         />
       ))}
 
+      {/* Mid Market Spread Bar */}
       <View style={styles.spreadRow}>
         <Text style={[styles.mid, mono]}>{fmt(mid, market.priceDp)}</Text>
-        <Text style={[styles.muted, mono]}>
-          Spread {fmt(spread, market.priceDp)} ({((spread / mid) * 100).toFixed(3)}%)
+        <Text style={[styles.spreadInfo, mono]}>
+          Spread: {fmt(spread, market.priceDp)}
         </Text>
       </View>
 
-      {bids.map((lvl, i) => (
+      {/* Bids (Buys) */}
+      {displayBids.map((lvl, i) => (
         <BookRow
           key={`b${i}`}
           level={lvl}
@@ -130,11 +172,50 @@ export const OrderBookView = memo(function OrderBookView({ market, book, onSelec
 });
 
 const styles = StyleSheet.create({
+  container: {
+    paddingBottom: 4,
+  },
   loading: { paddingVertical: 40, alignItems: 'center', gap: 10 },
   muted: { color: colors.muted, fontSize: 12 },
+  topControlRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  filterGroup: {
+    flexDirection: 'row',
+    backgroundColor: colors.panelAlt,
+    borderRadius: 4,
+    padding: 2,
+    gap: 4,
+  },
+  filterBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 3,
+  },
+  filterBtnActive: {
+    backgroundColor: colors.panel,
+  },
+  filterText: {
+    fontSize: 10,
+    color: colors.muted,
+    fontWeight: '600',
+  },
+  filterTextActive: {
+    color: colors.text,
+  },
+  bpsText: {
+    fontSize: 10,
+    color: colors.muted,
+  },
   pressureWrap: {
     paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingTop: 6,
     paddingBottom: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
@@ -168,11 +249,11 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: colors.red,
   },
-  headerRow: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 6 },
+  headerRow: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 5 },
   headerCell: { flex: 1, color: colors.muted, fontSize: 11 },
-  row: { flexDirection: 'row', paddingHorizontal: 12, height: 21, alignItems: 'center' },
+  row: { flexDirection: 'row', paddingHorizontal: 12, height: 20, alignItems: 'center' },
   depthBar: { position: 'absolute', right: 0, top: 1, bottom: 1 },
-  cell: { flex: 1, color: colors.text, fontSize: 12 },
+  cell: { flex: 1, color: colors.text, fontSize: 11 },
   left: { textAlign: 'left' },
   right: { textAlign: 'right' },
   spreadRow: {
@@ -180,12 +261,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginVertical: 4,
+    paddingVertical: 6,
+    marginVertical: 2,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     backgroundColor: colors.panelAlt,
   },
-  mid: { color: colors.text, fontSize: 16, fontWeight: '700' },
+  mid: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  spreadInfo: { color: colors.muted, fontSize: 11 },
 });

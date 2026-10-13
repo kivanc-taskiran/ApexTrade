@@ -212,5 +212,13 @@ export function usePortfolio() {
 
   const reset = useCallback(() => setPortfolio(initialPortfolio()), []);
 
-  return { portfolio, hydrated, placeMarketOrder, placeLimitOrder, cancelOrder, checkLimitOrders, reset };
+  const topUpFaucet = useCallback((amount = 10000) => {
+    setPortfolio((prev) => ({
+      ...prev,
+      cash: prev.cash + amount,
+    }));
+  }, []);
+
+  return { portfolio, hydrated, placeMarketOrder, placeLimitOrder, cancelOrder, checkLimitOrders, reset, topUpFaucet };
 }
+

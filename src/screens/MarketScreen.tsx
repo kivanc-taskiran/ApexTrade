@@ -10,13 +10,14 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { LivePriceChart } from '../components/LivePriceChart';
 import { OrderBookView } from '../components/OrderBookView';
 import { PortfolioCard } from '../components/PortfolioCard';
+import { ProTradingChart } from '../components/ProTradingChart';
 import { RecentTrades } from '../components/RecentTrades';
 import { TickerHeader } from '../components/TickerHeader';
 import { TradePanel } from '../components/TradePanel';
 import { MARKETS } from '../config';
+import { useKlineStream } from '../hooks/useKlineStream';
 import { useMarketStream } from '../hooks/useMarketStream';
 import { usePortfolio } from '../hooks/usePortfolio';
 import { colors } from '../theme';
@@ -34,6 +35,7 @@ export function MarketScreen() {
   const [selectedPrice, setSelectedPrice] = useState<number | null>(null);
 
   const { book, ticker, trades, status, msgPerSec } = useMarketStream(market.symbol);
+  const { klines, interval, setInterval } = useKlineStream(market.symbol, ticker);
   const {
     portfolio,
     placeMarketOrder,
@@ -41,6 +43,7 @@ export function MarketScreen() {
     cancelOrder,
     checkLimitOrders,
     reset,
+    topUpFaucet,
   } = usePortfolio();
 
   // Remember latest price and check for pending limit orders
@@ -68,7 +71,7 @@ export function MarketScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView style={styles.safe} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
-          {/* Top Ticker Header */}
+          {/* Top Ticker & Diagnostic Header */}
           <TickerHeader
             markets={MARKETS}
             market={market}
@@ -79,25 +82,34 @@ export function MarketScreen() {
             ticker={ticker}
             status={status}
             msgPerSec={msgPerSec}
+            onFaucet={topUpFaucet}
           />
 
           {isDesktop ? (
-            /* Desktop Pro Terminal Layout (3 Columns) */
+            /* Desktop Pro Terminal Layout (3-Column Bloomberg Grid) */
             <View style={styles.desktopGrid}>
-              {/* Left Column: Live Chart + Portfolio / History */}
+              {/* Left Column: Pro Candlestick Chart + Trading Console / Portfolio */}
               <View style={styles.colLeft}>
-                <LivePriceChart market={market} ticker={ticker} />
+                <ProTradingChart
+                  market={market}
+                  ticker={ticker}
+                  klines={klines}
+                  interval={interval}
+                  onSelectInterval={setInterval}
+                  book={book}
+                />
                 <View style={styles.card}>
                   <PortfolioCard
                     portfolio={portfolio}
                     prices={prices}
                     onReset={reset}
                     onCancelOrder={cancelOrder}
+                    onFaucet={topUpFaucet}
                   />
                 </View>
               </View>
 
-              {/* Center Column: Order Book & Trades */}
+              {/* Center Column: Order Book & Real-Time Trades */}
               <View style={styles.colCenter}>
                 <View style={styles.card}>
                   <View style={styles.tabs}>
@@ -118,7 +130,7 @@ export function MarketScreen() {
                 </View>
               </View>
 
-              {/* Right Column: Trading Ticket Panel */}
+              {/* Right Column: Execution Order Ticket */}
               <View style={styles.colRight}>
                 <View style={styles.card}>
                   <TradePanel
@@ -134,9 +146,16 @@ export function MarketScreen() {
               </View>
             </View>
           ) : (
-            /* Mobile Layout (Single Column) */
+            /* Mobile Layout (Clean Single-Column Stack) */
             <View style={styles.mobileWrap}>
-              <LivePriceChart market={market} ticker={ticker} />
+              <ProTradingChart
+                market={market}
+                ticker={ticker}
+                klines={klines}
+                interval={interval}
+                onSelectInterval={setInterval}
+                book={book}
+              />
 
               <View style={styles.card}>
                 <View style={styles.tabs}>
@@ -174,13 +193,14 @@ export function MarketScreen() {
                   prices={prices}
                   onReset={reset}
                   onCancelOrder={cancelOrder}
+                  onFaucet={topUpFaucet}
                 />
               </View>
             </View>
           )}
 
           <Text style={styles.footer}>
-            ApexTrade Pro · Binance Public WebSocket Data Stream · Simulated Paper Trading Engine
+            ApexTrade Pro Terminal · Binance Public WebSocket Stream & Historical Klines · Client-Side Matching Engine
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -194,21 +214,23 @@ const styles = StyleSheet.create({
   desktopGrid: {
     flexDirection: 'row',
     paddingHorizontal: 12,
+    marginTop: 10,
     gap: 12,
     alignItems: 'flex-start',
   },
   colLeft: {
-    flex: 2.2,
+    flex: 2.3,
     gap: 12,
   },
   colCenter: {
-    flex: 1.5,
+    flex: 1.4,
   },
   colRight: {
     flex: 1.3,
   },
   mobileWrap: {
     paddingHorizontal: 12,
+    marginTop: 10,
     gap: 12,
   },
   card: {
@@ -237,5 +259,5 @@ const styles = StyleSheet.create({
     height: 2,
     backgroundColor: colors.accent,
   },
-  footer: { color: colors.muted, fontSize: 11, textAlign: 'center', marginTop: 16 },
+  footer: { color: colors.muted, fontSize: 11, textAlign: 'center', marginTop: 20 },
 });

@@ -4,6 +4,7 @@ import { FEE_RATE } from '../config';
 import { simulateFill } from '../engine/matching';
 import { colors, mono } from '../theme';
 import { Market, OrderBook, OrderResult, OrderType, Side } from '../types';
+import { playSound } from '../utils/audio';
 import { floorTo, fmt } from '../utils/format';
 
 interface Props {
@@ -60,6 +61,7 @@ export function TradePanel({
   const limitTotal = isLimit ? limitPrice * qty : 0;
 
   const applyPercent = (p: number) => {
+    playSound('click');
     const targetPrice = isLimit ? limitPrice : book.asks[0]?.price || 1;
     let max = 0;
     if (isBuy && targetPrice > 0) {
@@ -83,6 +85,7 @@ export function TradePanel({
     if (isLimit) {
       const res = onLimitOrder(side, limitPrice, qty);
       if (res.ok) {
+        playSound(isBuy ? 'buy' : 'sell');
         setFeedback({ ok: true, text: res.message });
         setQtyText('');
       } else {
@@ -91,6 +94,7 @@ export function TradePanel({
     } else {
       const res = onMarketOrder(side, qty);
       if (res.ok) {
+        playSound(isBuy ? 'buy' : 'sell');
         setFeedback({ ok: true, text: res.message });
         setQtyText('');
       } else {
@@ -111,13 +115,14 @@ export function TradePanel({
             <Pressable
               key={t}
               onPress={() => {
+                playSound('click');
                 setOrderType(t);
                 setFeedback(null);
               }}
               style={[styles.typeBtn, active && styles.typeBtnActive]}
             >
               <Text style={[styles.typeText, active && styles.typeTextActive]}>
-                {t === 'limit' ? 'Limit Order' : 'Market Order'}
+                {t === 'limit' ? 'Limit' : 'Market'}
               </Text>
             </Pressable>
           );
@@ -133,27 +138,28 @@ export function TradePanel({
             <Pressable
               key={s}
               onPress={() => {
+                playSound('click');
                 setSide(s);
                 setFeedback(null);
               }}
               style={[styles.sideBtn, active && { backgroundColor: c }]}
             >
               <Text style={[styles.sideText, active && { color: '#fff' }]}>
-                {s === 'buy' ? 'Buy' : 'Sell'}
+                {s === 'buy' ? 'Buy / Long' : 'Sell / Short'}
               </Text>
             </Pressable>
           );
         })}
       </View>
 
-      <Text style={styles.label}>
-        Available:{' '}
-        <Text style={[styles.value, mono]}>
+      <View style={styles.availRow}>
+        <Text style={styles.availLabel}>Avail:</Text>
+        <Text style={[styles.availVal, mono]}>
           {isBuy ? `${fmt(cash, 2)} ${market.quote}` : `${fmt(holding, market.qtyDp)} ${market.base}`}
         </Text>
-      </Text>
+      </View>
 
-      {/* Limit Price Input (Only for Limit Orders) */}
+      {/* Limit Price Input */}
       {isLimit && (
         <View style={styles.inputWrap}>
           <Text style={styles.inputPrefix}>Price</Text>
@@ -232,14 +238,16 @@ export function TradePanel({
         ]}
       >
         <Text style={styles.submitText}>
-          {isLimit ? `Place Limit ${isBuy ? 'Buy' : 'Sell'}` : `Market ${isBuy ? 'Buy' : 'Sell'}`} {market.base}
+          {isLimit ? `Limit ${isBuy ? 'Buy' : 'Sell'}` : `Market ${isBuy ? 'Buy' : 'Sell'}`} {market.base}
         </Text>
       </Pressable>
 
       {feedback && (
-        <Text style={[styles.feedback, { color: feedback.ok ? colors.green : colors.red }]}>
-          {feedback.text}
-        </Text>
+        <View style={[styles.feedbackBox, { borderColor: feedback.ok ? colors.green : colors.red }]}>
+          <Text style={[styles.feedback, { color: feedback.ok ? colors.green : colors.red }]}>
+            {feedback.text}
+          </Text>
+        </View>
       )}
     </View>
   );
@@ -263,7 +271,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     padding: 2,
-    marginBottom: 4,
   },
   typeBtn: { flex: 1, paddingVertical: 6, alignItems: 'center', borderRadius: 4 },
   typeBtnActive: { backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
@@ -271,9 +278,10 @@ const styles = StyleSheet.create({
   typeTextActive: { color: colors.text, fontWeight: '700' },
   sideSwitch: { flexDirection: 'row', backgroundColor: colors.panelAlt, borderRadius: 6, padding: 3 },
   sideBtn: { flex: 1, paddingVertical: 8, borderRadius: 4, alignItems: 'center' },
-  sideText: { color: colors.muted, fontWeight: '700' },
-  label: { color: colors.muted, fontSize: 12 },
-  value: { color: colors.text, fontSize: 12, fontWeight: '600' },
+  sideText: { color: colors.muted, fontWeight: '700', fontSize: 13 },
+  availRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  availLabel: { color: colors.muted, fontSize: 11 },
+  availVal: { color: colors.text, fontSize: 12, fontWeight: '600' },
   inputWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -283,9 +291,9 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     paddingHorizontal: 12,
   },
-  inputPrefix: { color: colors.muted, fontSize: 13, marginRight: 8, fontWeight: '600' },
-  input: { flex: 1, color: colors.text, fontSize: 15, paddingVertical: 9 },
-  unit: { color: colors.muted, fontWeight: '600', fontSize: 12 },
+  inputPrefix: { color: colors.muted, fontSize: 12, marginRight: 8, fontWeight: '600' },
+  input: { flex: 1, color: colors.text, fontSize: 14, paddingVertical: 8 },
+  unit: { color: colors.muted, fontWeight: '600', fontSize: 11 },
   percentRow: { flexDirection: 'row', gap: 6 },
   percentBtn: {
     flex: 1,
@@ -297,9 +305,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.panelAlt,
   },
   percentText: { color: colors.muted, fontSize: 11, fontWeight: '600' },
-  estimate: { gap: 4, paddingVertical: 4 },
+  estimate: { gap: 4, paddingVertical: 2 },
   estRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  submit: { paddingVertical: 12, borderRadius: 6, alignItems: 'center' },
-  submitText: { color: '#fff', fontWeight: '800', fontSize: 14 },
-  feedback: { fontSize: 12, textAlign: 'center', fontWeight: '600' },
+  label: { color: colors.muted, fontSize: 11 },
+  value: { color: colors.text, fontSize: 11, fontWeight: '600' },
+  submit: { paddingVertical: 11, borderRadius: 6, alignItems: 'center' },
+  submitText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+  feedbackBox: {
+    backgroundColor: colors.panelAlt,
+    borderWidth: 1,
+    borderRadius: 6,
+    padding: 8,
+  },
+  feedback: { fontSize: 11, textAlign: 'center', fontWeight: '600' },
 });

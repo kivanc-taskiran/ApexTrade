@@ -71,3 +71,14 @@ export interface Portfolio {
 export type OrderResult =
   | { ok: true; fill?: Fill; openOrder?: OpenOrder; message: string }
   | { ok: false; reason: string };
+
+export type KlineInterval = '1m' | '5m' | '15m' | '1h' | '1d';
+
+export interface Kline {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
