@@ -4,6 +4,8 @@ export const MARKETS: Market[] = [
   { symbol: 'BTCUSDT', base: 'BTC', quote: 'USDT', priceDp: 2, qtyDp: 5 },
   { symbol: 'ETHUSDT', base: 'ETH', quote: 'USDT', priceDp: 2, qtyDp: 4 },
   { symbol: 'SOLUSDT', base: 'SOL', quote: 'USDT', priceDp: 2, qtyDp: 3 },
+  { symbol: 'BNBUSDT', base: 'BNB', quote: 'USDT', priceDp: 2, qtyDp: 3 },
+  { symbol: 'XRPUSDT', base: 'XRP', quote: 'USDT', priceDp: 4, qtyDp: 1 },
 ];
 
 /** Public market-data endpoints (no API key). Rotated on reconnect for resilience. */

@@ -1,6 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LivePriceChart } from '../components/LivePriceChart';
 import { OrderBookView } from '../components/OrderBookView';
 import { PortfolioCard } from '../components/PortfolioCard';
 import { RecentTrades } from '../components/RecentTrades';
@@ -12,73 +22,166 @@ import { usePortfolio } from '../hooks/usePortfolio';
 import { colors } from '../theme';
 import { Market, Side } from '../types';
 
-type Tab = 'book' | 'trades';
+type MiddleTab = 'book' | 'trades';
 
 export function MarketScreen() {
+  const { width } = useWindowDimensions();
+  const isDesktop = width >= 1024;
+
   const [market, setMarket] = useState<Market>(MARKETS[0]);
-  const [tab, setTab] = useState<Tab>('book');
+  const [middleTab, setMiddleTab] = useState<MiddleTab>('book');
   const [prices, setPrices] = useState<Record<string, number>>({});
+  const [selectedPrice, setSelectedPrice] = useState<number | null>(null);
 
   const { book, ticker, trades, status, msgPerSec } = useMarketStream(market.symbol);
-  const { portfolio, placeMarketOrder, reset } = usePortfolio();
+  const {
+    portfolio,
+    placeMarketOrder,
+    placeLimitOrder,
+    cancelOrder,
+    checkLimitOrders,
+    reset,
+  } = usePortfolio();
 
-  // Remember the last price per asset so portfolio equity stays valued after switching markets.
+  // Remember latest price and check for pending limit orders
   useEffect(() => {
     if (!ticker) return;
     setPrices((p) => (p[market.base] === ticker.last ? p : { ...p, [market.base]: ticker.last }));
-  }, [ticker, market.base]);
+    checkLimitOrders(market.symbol, ticker.last);
+  }, [ticker, market.base, market.symbol, checkLimitOrders]);
 
-  const handleOrder = useCallback(
+  const handleMarketOrder = useCallback(
     (side: Side, qty: number) => placeMarketOrder(market, side, qty, book),
     [placeMarketOrder, market, book],
   );
+
+  const handleLimitOrder = useCallback(
+    (side: Side, price: number, qty: number) => placeLimitOrder(market, side, price, qty),
+    [placeLimitOrder, market],
+  );
+
+  const handleSelectPrice = useCallback((price: number) => {
+    setSelectedPrice(price);
+  }, []);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView style={styles.safe} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
+          {/* Top Ticker Header */}
           <TickerHeader
             markets={MARKETS}
             market={market}
-            onSelect={setMarket}
+            onSelect={(m) => {
+              setMarket(m);
+              setSelectedPrice(null);
+            }}
             ticker={ticker}
             status={status}
             msgPerSec={msgPerSec}
           />
 
-          <View style={styles.card}>
-            <View style={styles.tabs}>
-              {(['book', 'trades'] as Tab[]).map((t) => (
-                <Pressable key={t} onPress={() => setTab(t)} style={styles.tab}>
-                  <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
-                    {t === 'book' ? 'Order Book' : 'Market Trades'}
-                  </Text>
-                  {tab === t && <View style={styles.tabUnderline} />}
-                </Pressable>
-              ))}
+          {isDesktop ? (
+            /* Desktop Pro Terminal Layout (3 Columns) */
+            <View style={styles.desktopGrid}>
+              {/* Left Column: Live Chart + Portfolio / History */}
+              <View style={styles.colLeft}>
+                <LivePriceChart market={market} ticker={ticker} />
+                <View style={styles.card}>
+                  <PortfolioCard
+                    portfolio={portfolio}
+                    prices={prices}
+                    onReset={reset}
+                    onCancelOrder={cancelOrder}
+                  />
+                </View>
+              </View>
+
+              {/* Center Column: Order Book & Trades */}
+              <View style={styles.colCenter}>
+                <View style={styles.card}>
+                  <View style={styles.tabs}>
+                    {(['book', 'trades'] as MiddleTab[]).map((t) => (
+                      <Pressable key={t} onPress={() => setMiddleTab(t)} style={styles.tab}>
+                        <Text style={[styles.tabText, middleTab === t && styles.tabTextActive]}>
+                          {t === 'book' ? 'Order Book Depth' : 'Recent Market Trades'}
+                        </Text>
+                        {middleTab === t && <View style={styles.tabUnderline} />}
+                      </Pressable>
+                    ))}
+                  </View>
+                  {middleTab === 'book' ? (
+                    <OrderBookView market={market} book={book} onSelectPrice={handleSelectPrice} />
+                  ) : (
+                    <RecentTrades market={market} trades={trades} />
+                  )}
+                </View>
+              </View>
+
+              {/* Right Column: Trading Ticket Panel */}
+              <View style={styles.colRight}>
+                <View style={styles.card}>
+                  <TradePanel
+                    market={market}
+                    book={book}
+                    cash={portfolio.cash}
+                    holding={portfolio.holdings[market.base] ?? 0}
+                    selectedPrice={selectedPrice}
+                    onMarketOrder={handleMarketOrder}
+                    onLimitOrder={handleLimitOrder}
+                  />
+                </View>
+              </View>
             </View>
-            {tab === 'book' ? (
-              <OrderBookView market={market} book={book} />
-            ) : (
-              <RecentTrades market={market} trades={trades} />
-            )}
-          </View>
+          ) : (
+            /* Mobile Layout (Single Column) */
+            <View style={styles.mobileWrap}>
+              <LivePriceChart market={market} ticker={ticker} />
 
-          <View style={styles.card}>
-            <TradePanel
-              market={market}
-              book={book}
-              cash={portfolio.cash}
-              holding={portfolio.holdings[market.base] ?? 0}
-              onOrder={handleOrder}
-            />
-          </View>
+              <View style={styles.card}>
+                <View style={styles.tabs}>
+                  {(['book', 'trades'] as MiddleTab[]).map((t) => (
+                    <Pressable key={t} onPress={() => setMiddleTab(t)} style={styles.tab}>
+                      <Text style={[styles.tabText, middleTab === t && styles.tabTextActive]}>
+                        {t === 'book' ? 'Order Book' : 'Market Trades'}
+                      </Text>
+                      {middleTab === t && <View style={styles.tabUnderline} />}
+                    </Pressable>
+                  ))}
+                </View>
+                {middleTab === 'book' ? (
+                  <OrderBookView market={market} book={book} onSelectPrice={handleSelectPrice} />
+                ) : (
+                  <RecentTrades market={market} trades={trades} />
+                )}
+              </View>
 
-          <View style={styles.card}>
-            <PortfolioCard portfolio={portfolio} prices={prices} onReset={reset} />
-          </View>
+              <View style={styles.card}>
+                <TradePanel
+                  market={market}
+                  book={book}
+                  cash={portfolio.cash}
+                  holding={portfolio.holdings[market.base] ?? 0}
+                  selectedPrice={selectedPrice}
+                  onMarketOrder={handleMarketOrder}
+                  onLimitOrder={handleLimitOrder}
+                />
+              </View>
 
-          <Text style={styles.footer}>Market data: Binance public WebSocket · Paper trading only</Text>
+              <View style={styles.card}>
+                <PortfolioCard
+                  portfolio={portfolio}
+                  prices={prices}
+                  onReset={reset}
+                  onCancelOrder={cancelOrder}
+                />
+              </View>
+            </View>
+          )}
+
+          <Text style={styles.footer}>
+            ApexTrade Pro · Binance Public WebSocket Data Stream · Simulated Paper Trading Engine
+          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -87,11 +190,29 @@ export function MarketScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
-  scroll: { paddingBottom: 32 },
+  scroll: { paddingBottom: 40 },
+  desktopGrid: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  colLeft: {
+    flex: 2.2,
+    gap: 12,
+  },
+  colCenter: {
+    flex: 1.5,
+  },
+  colRight: {
+    flex: 1.3,
+  },
+  mobileWrap: {
+    paddingHorizontal: 12,
+    gap: 12,
+  },
   card: {
     backgroundColor: colors.panel,
-    marginHorizontal: 12,
-    marginBottom: 12,
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
@@ -103,10 +224,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     marginBottom: 4,
+    backgroundColor: colors.panelAlt,
   },
   tab: { paddingHorizontal: 14, paddingVertical: 10 },
   tabText: { color: colors.muted, fontWeight: '600', fontSize: 13 },
-  tabTextActive: { color: colors.text },
+  tabTextActive: { color: colors.text, fontWeight: '700' },
   tabUnderline: {
     position: 'absolute',
     bottom: 0,
@@ -115,5 +237,5 @@ const styles = StyleSheet.create({
     height: 2,
     backgroundColor: colors.accent,
   },
-  footer: { color: colors.muted, fontSize: 11, textAlign: 'center', marginTop: 4 },
+  footer: { color: colors.muted, fontSize: 11, textAlign: 'center', marginTop: 16 },
 });

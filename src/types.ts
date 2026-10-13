@@ -39,6 +39,8 @@ export interface Trade {
   isBuyerMaker: boolean;
 }
 
+export type OrderType = 'market' | 'limit';
+
 export interface Fill {
   id: string;
   symbol: string;
@@ -49,10 +51,23 @@ export interface Fill {
   time: number;
 }
 
+export interface OpenOrder {
+  id: string;
+  symbol: string;
+  side: Side;
+  type: OrderType;
+  price: number;
+  qty: number;
+  time: number;
+}
+
 export interface Portfolio {
   cash: number;
   holdings: Record<string, number>;
   fills: Fill[];
+  openOrders: OpenOrder[];
 }
 
-export type OrderResult = { ok: true; fill: Fill } | { ok: false; reason: string };
+export type OrderResult =
+  | { ok: true; fill?: Fill; openOrder?: OpenOrder; message: string }
+  | { ok: false; reason: string };
