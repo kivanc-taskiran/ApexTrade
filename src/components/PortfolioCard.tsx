@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { MARKETS, STARTING_CASH } from '../config';
 import { colors, mono } from '../theme';
-import { OpenOrder, Portfolio } from '../types';
+import { Market, OpenOrder, OrderBook, Portfolio } from '../types';
 import { playSound } from '../utils/audio';
 import { fmt, fmtTime } from '../utils/format';
 
@@ -11,12 +11,20 @@ interface Props {
   prices: Record<string, number>;
   onReset: () => void;
   onCancelOrder: (orderId: string) => void;
+  onClosePosition?: (market: Market) => void;
   onFaucet?: () => void;
 }
 
 type Tab = 'positions' | 'orders' | 'history' | 'stats';
 
-export function PortfolioCard({ portfolio, prices, onReset, onCancelOrder, onFaucet }: Props) {
+export function PortfolioCard({
+  portfolio,
+  prices,
+  onReset,
+  onCancelOrder,
+  onClosePosition,
+  onFaucet,
+}: Props) {
   const [tab, setTab] = useState<Tab>('positions');
 
   const holdingsValue = Object.entries(portfolio.holdings).reduce((sum, [asset, qty]) => {
@@ -38,6 +46,32 @@ export function PortfolioCard({ portfolio, prices, onReset, onCancelOrder, onFau
   const totalVolume = portfolio.fills.reduce((sum, f) => sum + f.avgPrice * f.qty, 0);
   const buyFills = portfolio.fills.filter((f) => f.side === 'buy');
   const sellFills = portfolio.fills.filter((f) => f.side === 'sell');
+
+  // Export Trade History to CSV (Web download)
+  const handleExportCSV = () => {
+    playSound('click');
+    if (typeof window === 'undefined' || portfolio.fills.length === 0) return;
+    try {
+      const header = 'ID,Symbol,Side,Quantity,Price,Fee,Time\n';
+      const rows = portfolio.fills
+        .map(
+          (f) =>
+            `${f.id},${f.symbol},${f.side.toUpperCase()},${f.qty},${f.avgPrice},${f.fee},"${new Date(f.time).toISOString()}"`,
+        )
+        .join('\n');
+      const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `apextrade_fills_${Date.now()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -114,35 +148,59 @@ export function PortfolioCard({ portfolio, prices, onReset, onCancelOrder, onFau
       {tab === 'positions' && (
         <View style={styles.table}>
           <View style={styles.tableHeaderRow}>
-            <Text style={[styles.thCell, { flex: 1.2 }]}>Asset</Text>
+            <Text style={[styles.thCell, { flex: 1 }]}>Asset</Text>
             <Text style={[styles.thCell, styles.right]}>Balance</Text>
-            <Text style={[styles.thCell, styles.right]}>Price</Text>
-            <Text style={[styles.thCell, styles.right]}>Value (USDT)</Text>
+            <Text style={[styles.thCell, styles.right]}>Avg Buy</Text>
+            <Text style={[styles.thCell, styles.right]}>Mark Price</Text>
+            <Text style={[styles.thCell, styles.right]}>Unrealized PnL</Text>
+            <Text style={[styles.thCell, styles.right]}>Action</Text>
           </View>
 
           {/* USDT Cash Row */}
           <View style={styles.tableRow}>
-            <Text style={[styles.tdCell, { flex: 1.2, fontWeight: '700' }]}>USDT</Text>
+            <Text style={[styles.tdCell, { flex: 1, fontWeight: '700' }]}>USDT</Text>
             <Text style={[styles.tdCell, styles.right, mono]}>{fmt(portfolio.cash, 2)}</Text>
             <Text style={[styles.tdCell, styles.right, mono]}>$1.00</Text>
-            <Text style={[styles.tdCell, styles.right, mono, { fontWeight: '700' }]}>
-              ${fmt(portfolio.cash, 2)}
-            </Text>
+            <Text style={[styles.tdCell, styles.right, mono]}>$1.00</Text>
+            <Text style={[styles.tdCell, styles.right, mono, { color: colors.muted }]}>—</Text>
+            <Text style={[styles.tdCell, styles.right, mono, { color: colors.muted }]}>—</Text>
           </View>
 
           {/* Holdings Rows */}
           {MARKETS.map((m) => {
             const qty = portfolio.holdings[m.base] ?? 0;
             const price = prices[m.base] || 0;
-            const val = qty * price;
+            const avgBuy = portfolio.avgEntryPrices[m.base] || 0;
+            const posPnl = avgBuy > 0 && price > 0 ? (price - avgBuy) * qty : 0;
+            const posPnlPct = avgBuy > 0 && price > 0 ? ((price - avgBuy) / avgBuy) * 100 : 0;
+            const pColor = posPnl >= 0 ? colors.green : colors.red;
+
             return (
               <View key={m.base} style={styles.tableRow}>
-                <Text style={[styles.tdCell, { flex: 1.2, fontWeight: '700' }]}>{m.base}</Text>
+                <Text style={[styles.tdCell, { flex: 1, fontWeight: '700' }]}>{m.base}</Text>
                 <Text style={[styles.tdCell, styles.right, mono]}>{fmt(qty, m.qtyDp)}</Text>
-                <Text style={[styles.tdCell, styles.right, mono]}>${fmt(price, m.priceDp)}</Text>
-                <Text style={[styles.tdCell, styles.right, mono, { fontWeight: '700' }]}>
-                  ${fmt(val, 2)}
+                <Text style={[styles.tdCell, styles.right, mono]}>
+                  {avgBuy > 0 ? `$${fmt(avgBuy, m.priceDp)}` : '—'}
                 </Text>
+                <Text style={[styles.tdCell, styles.right, mono]}>${fmt(price, m.priceDp)}</Text>
+                <Text style={[styles.tdCell, styles.right, mono, { color: pColor, fontWeight: '600' }]}>
+                  {qty > 0 && avgBuy > 0 ? `${posPnl >= 0 ? '+' : ''}$${fmt(posPnl, 2)} (${posPnlPct.toFixed(2)}%)` : '—'}
+                </Text>
+                <View style={[styles.tdCell, styles.alignRight]}>
+                  {qty > 0 && onClosePosition ? (
+                    <Pressable
+                      onPress={() => {
+                        playSound('click');
+                        onClosePosition(m);
+                      }}
+                      style={styles.closeBtn}
+                    >
+                      <Text style={styles.closeBtnText}>Close</Text>
+                    </Pressable>
+                  ) : (
+                    <Text style={{ color: colors.muted }}>—</Text>
+                  )}
+                </View>
               </View>
             );
           })}
@@ -154,19 +212,22 @@ export function PortfolioCard({ portfolio, prices, onReset, onCancelOrder, onFau
         <View style={styles.list}>
           {openCount === 0 ? (
             <Text style={styles.emptyText}>
-              No active limit orders. Orders will automatically execute when market price hits your limit target.
+              No active orders. Limit and Stop-Limit orders will trigger automatically when market hits target.
             </Text>
           ) : (
             portfolio.openOrders.map((o) => (
               <View key={o.id} style={styles.fillRow}>
                 <View style={styles.fillLeft}>
                   <Text style={[styles.sideBadge, { color: o.side === 'buy' ? colors.green : colors.red }]}>
-                    LIMIT {o.side.toUpperCase()}
+                    {o.type.toUpperCase().replace('_', '-')} {o.side.toUpperCase()}
                   </Text>
                   <Text style={[styles.fillText, mono]}>
                     {fmt(o.qty, dpFor(o.symbol))} {o.symbol.replace('USDT', '')}
                   </Text>
                 </View>
+                {o.stopPrice && (
+                  <Text style={[styles.fillMuted, mono]}>Stop: ${fmt(o.stopPrice, 2)}</Text>
+                )}
                 <Text style={[styles.fillText, mono]}>Target: ${fmt(o.price, 2)}</Text>
                 <Pressable
                   onPress={() => {
@@ -183,9 +244,17 @@ export function PortfolioCard({ portfolio, prices, onReset, onCancelOrder, onFau
         </View>
       )}
 
-      {/* Tab 3: Trade History */}
+      {/* Tab 3: Trade History with CSV Export */}
       {tab === 'history' && (
         <View style={styles.list}>
+          {portfolio.fills.length > 0 && (
+            <View style={styles.exportRow}>
+              <Pressable onPress={handleExportCSV} style={styles.exportBtn}>
+                <Text style={styles.exportText}>📥 Export CSV</Text>
+              </Pressable>
+            </View>
+          )}
+
           {portfolio.fills.length === 0 ? (
             <Text style={styles.emptyText}>No executions logged yet. Place an order to see execution receipts.</Text>
           ) : (
@@ -300,7 +369,25 @@ const styles = StyleSheet.create({
   },
   tdCell: { flex: 1, color: colors.text, fontSize: 12 },
   right: { textAlign: 'right' },
+  alignRight: { alignItems: 'flex-end', justifyContent: 'center' },
+  closeBtn: {
+    backgroundColor: 'rgba(246,70,93,0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  closeBtnText: { color: colors.red, fontSize: 10, fontWeight: '700' },
   list: { marginTop: 6, gap: 6 },
+  exportRow: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 4 },
+  exportBtn: {
+    backgroundColor: colors.panelAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  exportText: { color: colors.text, fontSize: 11, fontWeight: '600' },
   emptyText: { color: colors.muted, fontSize: 11, textAlign: 'center', paddingVertical: 14 },
   fillRow: {
     flexDirection: 'row',

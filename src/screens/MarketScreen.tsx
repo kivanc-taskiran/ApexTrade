@@ -20,8 +20,9 @@ import { MARKETS } from '../config';
 import { useKlineStream } from '../hooks/useKlineStream';
 import { useMarketStream } from '../hooks/useMarketStream';
 import { usePortfolio } from '../hooks/usePortfolio';
-import { colors } from '../theme';
-import { Market, Side } from '../types';
+import { colors, mono } from '../theme';
+import { Market, Side, ToastMessage } from '../types';
+import { playSound } from '../utils/audio';
 
 type MiddleTab = 'book' | 'trades';
 
@@ -33,6 +34,8 @@ export function MarketScreen() {
   const [middleTab, setMiddleTab] = useState<MiddleTab>('book');
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [selectedPrice, setSelectedPrice] = useState<number | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+  const [showHotkeysModal, setShowHotkeysModal] = useState(false);
 
   const { book, ticker, trades, status, msgPerSec } = useMarketStream(market.symbol);
   const { klines, interval, setInterval } = useKlineStream(market.symbol, ticker);
@@ -40,11 +43,21 @@ export function MarketScreen() {
     portfolio,
     placeMarketOrder,
     placeLimitOrder,
+    placeStopLimitOrder,
     cancelOrder,
     checkLimitOrders,
+    closePosition,
     reset,
     topUpFaucet,
   } = usePortfolio();
+
+  const showToast = useCallback((title: string, type: 'success' | 'error' | 'info' = 'success') => {
+    const id = String(Date.now());
+    setToast({ id, title, type });
+    setTimeout(() => {
+      setToast((curr) => (curr?.id === id ? null : curr));
+    }, 3500);
+  }, []);
 
   // Remember latest price and check for pending limit orders
   useEffect(() => {
@@ -53,14 +66,78 @@ export function MarketScreen() {
     checkLimitOrders(market.symbol, ticker.last);
   }, [ticker, market.base, market.symbol, checkLimitOrders]);
 
+  // Global Keyboard Shortcuts (Web Terminal Experience)
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea') return;
+
+      const key = e.key.toUpperCase();
+      if (key === '1') {
+        setInterval('1m');
+        showToast('Chart Timeframe: 1m', 'info');
+      } else if (key === '5') {
+        setInterval('5m');
+        showToast('Chart Timeframe: 5m', 'info');
+      } else if (key === 'H') {
+        setInterval('1h');
+        showToast('Chart Timeframe: 1h', 'info');
+      } else if (key === 'D') {
+        setInterval('1d');
+        showToast('Chart Timeframe: 1d', 'info');
+      } else if (key === 'F') {
+        topUpFaucet(10000);
+        playSound('faucet');
+        showToast('+$10,000 USDT Faucet Deposited', 'success');
+      } else if (key === '?') {
+        setShowHotkeysModal((prev) => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [setInterval, showToast, topUpFaucet]);
+
   const handleMarketOrder = useCallback(
-    (side: Side, qty: number) => placeMarketOrder(market, side, qty, book),
-    [placeMarketOrder, market, book],
+    (side: Side, qty: number) => {
+      const res = placeMarketOrder(market, side, qty, book);
+      if (res.ok) showToast(res.message, 'success');
+      return res;
+    },
+    [placeMarketOrder, market, book, showToast],
   );
 
   const handleLimitOrder = useCallback(
-    (side: Side, price: number, qty: number) => placeLimitOrder(market, side, price, qty),
-    [placeLimitOrder, market],
+    (side: Side, price: number, qty: number) => {
+      const res = placeLimitOrder(market, side, price, qty);
+      if (res.ok) showToast(res.message, 'success');
+      return res;
+    },
+    [placeLimitOrder, market, showToast],
+  );
+
+  const handleStopLimitOrder = useCallback(
+    (side: Side, stopPrice: number, price: number, qty: number) => {
+      const res = placeStopLimitOrder(market, side, stopPrice, price, qty);
+      if (res.ok) showToast(res.message, 'success');
+      return res;
+    },
+    [placeStopLimitOrder, market, showToast],
+  );
+
+  const handleClosePosition = useCallback(
+    (targetMarket: Market) => {
+      const res = closePosition(targetMarket, book);
+      if (res.ok) {
+        playSound('sell');
+        showToast(`Closed ${targetMarket.base} position at market price`, 'success');
+      } else {
+        showToast(res.reason, 'error');
+      }
+    },
+    [closePosition, book, showToast],
   );
 
   const handleSelectPrice = useCallback((price: number) => {
@@ -70,6 +147,38 @@ export function MarketScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView style={styles.safe} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        {/* Floating Toast Notification */}
+        {toast && (
+          <View
+            style={[
+              styles.floatingToast,
+              {
+                borderColor:
+                  toast.type === 'success'
+                    ? colors.green
+                    : toast.type === 'error'
+                    ? colors.red
+                    : colors.accent,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.toastDot,
+                {
+                  backgroundColor:
+                    toast.type === 'success'
+                      ? colors.green
+                      : toast.type === 'error'
+                      ? colors.red
+                      : colors.accent,
+                },
+              ]}
+            />
+            <Text style={styles.toastTitle}>{toast.title}</Text>
+          </View>
+        )}
+
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
           {/* Top Ticker & Diagnostic Header */}
           <TickerHeader
@@ -82,7 +191,10 @@ export function MarketScreen() {
             ticker={ticker}
             status={status}
             msgPerSec={msgPerSec}
-            onFaucet={topUpFaucet}
+            onFaucet={() => {
+              topUpFaucet(10000);
+              showToast('+$10,000 USDT Faucet Deposited', 'success');
+            }}
           />
 
           {isDesktop ? (
@@ -104,7 +216,11 @@ export function MarketScreen() {
                     prices={prices}
                     onReset={reset}
                     onCancelOrder={cancelOrder}
-                    onFaucet={topUpFaucet}
+                    onClosePosition={handleClosePosition}
+                    onFaucet={() => {
+                      topUpFaucet(10000);
+                      showToast('+$10,000 USDT Faucet Deposited', 'success');
+                    }}
                   />
                 </View>
               </View>
@@ -125,7 +241,7 @@ export function MarketScreen() {
                   {middleTab === 'book' ? (
                     <OrderBookView market={market} book={book} onSelectPrice={handleSelectPrice} />
                   ) : (
-                    <RecentTrades market={market} trades={trades} />
+                    <RecentTrades market={market} trades={trades} onSelectPrice={handleSelectPrice} />
                   )}
                 </View>
               </View>
@@ -141,6 +257,8 @@ export function MarketScreen() {
                     selectedPrice={selectedPrice}
                     onMarketOrder={handleMarketOrder}
                     onLimitOrder={handleLimitOrder}
+                    onStopLimitOrder={handleStopLimitOrder}
+                    onShowToast={showToast}
                   />
                 </View>
               </View>
@@ -171,7 +289,7 @@ export function MarketScreen() {
                 {middleTab === 'book' ? (
                   <OrderBookView market={market} book={book} onSelectPrice={handleSelectPrice} />
                 ) : (
-                  <RecentTrades market={market} trades={trades} />
+                  <RecentTrades market={market} trades={trades} onSelectPrice={handleSelectPrice} />
                 )}
               </View>
 
@@ -184,6 +302,8 @@ export function MarketScreen() {
                   selectedPrice={selectedPrice}
                   onMarketOrder={handleMarketOrder}
                   onLimitOrder={handleLimitOrder}
+                  onStopLimitOrder={handleStopLimitOrder}
+                  onShowToast={showToast}
                 />
               </View>
 
@@ -193,15 +313,24 @@ export function MarketScreen() {
                   prices={prices}
                   onReset={reset}
                   onCancelOrder={cancelOrder}
-                  onFaucet={topUpFaucet}
+                  onClosePosition={handleClosePosition}
+                  onFaucet={() => {
+                    topUpFaucet(10000);
+                    showToast('+$10,000 USDT Faucet Deposited', 'success');
+                  }}
                 />
               </View>
             </View>
           )}
 
-          <Text style={styles.footer}>
-            ApexTrade Pro Terminal · Binance Public WebSocket Stream & Historical Klines · Client-Side Matching Engine
-          </Text>
+          <View style={styles.footerWrap}>
+            <Text style={styles.footer}>
+              ApexTrade Pro Terminal · Binance Public WebSocket Stream & Historical Klines · Client-Side Matching Engine
+            </Text>
+            <Text style={[styles.footerHotkeys, mono]}>
+              Hotkeys: [1, 5, H, D] Timeframe · [F] +10k Faucet · Tap price to fill
+            </Text>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -211,6 +340,27 @@ export function MarketScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   scroll: { paddingBottom: 40 },
+  floatingToast: {
+    position: 'absolute',
+    top: 14,
+    right: 16,
+    zIndex: 9999,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#161a1e',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  toastDot: { width: 8, height: 8, borderRadius: 4 },
+  toastTitle: { color: colors.text, fontSize: 12, fontWeight: '700' },
   desktopGrid: {
     flexDirection: 'row',
     paddingHorizontal: 12,
@@ -259,5 +409,11 @@ const styles = StyleSheet.create({
     height: 2,
     backgroundColor: colors.accent,
   },
-  footer: { color: colors.muted, fontSize: 11, textAlign: 'center', marginTop: 20 },
+  footerWrap: {
+    marginTop: 20,
+    alignItems: 'center',
+    gap: 4,
+  },
+  footer: { color: colors.muted, fontSize: 11, textAlign: 'center' },
+  footerHotkeys: { color: colors.accent, fontSize: 10, opacity: 0.8 },
 });

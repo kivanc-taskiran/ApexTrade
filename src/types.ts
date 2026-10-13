@@ -39,7 +39,7 @@ export interface Trade {
   isBuyerMaker: boolean;
 }
 
-export type OrderType = 'market' | 'limit';
+export type OrderType = 'market' | 'limit' | 'stop_limit';
 
 export interface Fill {
   id: string;
@@ -57,6 +57,7 @@ export interface OpenOrder {
   side: Side;
   type: OrderType;
   price: number;
+  stopPrice?: number;
   qty: number;
   time: number;
 }
@@ -64,6 +65,7 @@ export interface OpenOrder {
 export interface Portfolio {
   cash: number;
   holdings: Record<string, number>;
+  avgEntryPrices: Record<string, number>;
   fills: Fill[];
   openOrders: OpenOrder[];
 }
@@ -81,4 +83,11 @@ export interface Kline {
   low: number;
   close: number;
   volume: number;
+}
+
+export interface ToastMessage {
+  id: string;
+  type: 'success' | 'error' | 'info';
+  title: string;
+  desc?: string;
 }

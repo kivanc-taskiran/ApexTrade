@@ -15,6 +15,8 @@ interface Props {
   selectedPrice?: number | null;
   onMarketOrder: (side: Side, qty: number) => OrderResult;
   onLimitOrder: (side: Side, price: number, qty: number) => OrderResult;
+  onStopLimitOrder: (side: Side, stopPrice: number, price: number, qty: number) => OrderResult;
+  onShowToast?: (title: string, type: 'success' | 'error') => void;
 }
 
 const PERCENTS = [0.25, 0.5, 0.75, 1];
@@ -27,18 +29,21 @@ export function TradePanel({
   selectedPrice,
   onMarketOrder,
   onLimitOrder,
+  onStopLimitOrder,
+  onShowToast,
 }: Props) {
   const [orderType, setOrderType] = useState<OrderType>('limit');
   const [side, setSide] = useState<Side>('buy');
+  const [stopPriceText, setStopPriceText] = useState('');
   const [limitPriceText, setLimitPriceText] = useState('');
   const [qtyText, setQtyText] = useState('');
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // When selectedPrice is passed from order book tap, update the limit price
+  // When selectedPrice is passed from order book or recent trade tap, update the limit price
   useEffect(() => {
     if (selectedPrice) {
       setLimitPriceText(String(selectedPrice));
-      setOrderType('limit');
+      if (orderType === 'market') setOrderType('limit');
     }
   }, [selectedPrice]);
 
@@ -47,22 +52,27 @@ export function TradePanel({
     setQtyText('');
     setFeedback(null);
     const bestAsk = book.asks[0]?.price;
-    if (bestAsk) setLimitPriceText(String(bestAsk));
+    if (bestAsk) {
+      setLimitPriceText(String(bestAsk));
+      setStopPriceText(String(bestAsk));
+    }
   }, [market.symbol]);
 
   const qty = Number(qtyText.replace(',', '.')) || 0;
   const limitPrice = Number(limitPriceText.replace(',', '.')) || 0;
+  const stopPrice = Number(stopPriceText.replace(',', '.')) || 0;
   const levels = side === 'buy' ? book.asks : book.bids;
   const isBuy = side === 'buy';
   const isLimit = orderType === 'limit';
+  const isStopLimit = orderType === 'stop_limit';
   const accent = isBuy ? colors.green : colors.red;
 
-  const estimate = !isLimit && qty > 0 ? simulateFill(levels, qty) : null;
-  const limitTotal = isLimit ? limitPrice * qty : 0;
+  const estimate = orderType === 'market' && qty > 0 ? simulateFill(levels, qty) : null;
+  const orderTotal = (isLimit || isStopLimit) ? limitPrice * qty : 0;
 
   const applyPercent = (p: number) => {
     playSound('click');
-    const targetPrice = isLimit ? limitPrice : book.asks[0]?.price || 1;
+    const targetPrice = (isLimit || isStopLimit) ? limitPrice : book.asks[0]?.price || 1;
     let max = 0;
     if (isBuy && targetPrice > 0) {
       max = cash / (targetPrice * (1 + FEE_RATE) * 1.002);
@@ -81,35 +91,44 @@ export function TradePanel({
     }
   };
 
+  const adjustQty = (delta: number) => {
+    playSound('click');
+    const next = Math.max(0, qty + delta);
+    setQtyText(String(floorTo(next, market.qtyDp)));
+  };
+
   const submit = () => {
-    if (isLimit) {
-      const res = onLimitOrder(side, limitPrice, qty);
-      if (res.ok) {
-        playSound(isBuy ? 'buy' : 'sell');
-        setFeedback({ ok: true, text: res.message });
-        setQtyText('');
-      } else {
-        setFeedback({ ok: false, text: res.reason });
-      }
+    let res: OrderResult;
+    if (isStopLimit) {
+      res = onStopLimitOrder(side, stopPrice, limitPrice, qty);
+    } else if (isLimit) {
+      res = onLimitOrder(side, limitPrice, qty);
     } else {
-      const res = onMarketOrder(side, qty);
-      if (res.ok) {
-        playSound(isBuy ? 'buy' : 'sell');
-        setFeedback({ ok: true, text: res.message });
-        setQtyText('');
-      } else {
-        setFeedback({ ok: false, text: res.reason });
-      }
+      res = onMarketOrder(side, qty);
+    }
+
+    if (res.ok) {
+      playSound(isBuy ? 'buy' : 'sell');
+      setFeedback({ ok: true, text: res.message });
+      onShowToast?.(res.message, 'success');
+      setQtyText('');
+    } else {
+      setFeedback({ ok: false, text: res.reason });
+      onShowToast?.(res.reason, 'error');
     }
   };
 
-  const canSubmit = isLimit ? limitPrice > 0 && qty > 0 : !!estimate;
+  const canSubmit = isStopLimit
+    ? stopPrice > 0 && limitPrice > 0 && qty > 0
+    : isLimit
+    ? limitPrice > 0 && qty > 0
+    : !!estimate;
 
   return (
     <View style={styles.container}>
-      {/* Order Type Switcher: Limit vs Market */}
+      {/* Order Type Switcher: Limit, Market, Stop-Limit */}
       <View style={styles.typeSwitch}>
-        {(['limit', 'market'] as OrderType[]).map((t) => {
+        {(['limit', 'market', 'stop_limit'] as OrderType[]).map((t) => {
           const active = t === orderType;
           return (
             <Pressable
@@ -122,7 +141,7 @@ export function TradePanel({
               style={[styles.typeBtn, active && styles.typeBtnActive]}
             >
               <Text style={[styles.typeText, active && styles.typeTextActive]}>
-                {t === 'limit' ? 'Limit' : 'Market'}
+                {t === 'limit' ? 'Limit' : t === 'market' ? 'Market' : 'Stop-Limit'}
               </Text>
             </Pressable>
           );
@@ -153,14 +172,33 @@ export function TradePanel({
       </View>
 
       <View style={styles.availRow}>
-        <Text style={styles.availLabel}>Avail:</Text>
+        <Text style={styles.availLabel}>Available Balance:</Text>
         <Text style={[styles.availVal, mono]}>
           {isBuy ? `${fmt(cash, 2)} ${market.quote}` : `${fmt(holding, market.qtyDp)} ${market.base}`}
         </Text>
       </View>
 
-      {/* Limit Price Input */}
-      {isLimit && (
+      {/* Stop Trigger Price Input (For Stop-Limit) */}
+      {isStopLimit && (
+        <View style={styles.inputWrap}>
+          <Text style={styles.inputPrefix}>Stop</Text>
+          <TextInput
+            value={stopPriceText}
+            onChangeText={(t) => {
+              setStopPriceText(t);
+              setFeedback(null);
+            }}
+            placeholder="Trigger price"
+            placeholderTextColor={colors.muted}
+            keyboardType="decimal-pad"
+            style={[styles.input, mono]}
+          />
+          <Text style={styles.unit}>{market.quote}</Text>
+        </View>
+      )}
+
+      {/* Limit Price Input (For Limit and Stop-Limit) */}
+      {(isLimit || isStopLimit) && (
         <View style={styles.inputWrap}>
           <Text style={styles.inputPrefix}>Price</Text>
           <TextInput
@@ -178,7 +216,7 @@ export function TradePanel({
         </View>
       )}
 
-      {/* Amount Input */}
+      {/* Amount Input with Steppers */}
       <View style={styles.inputWrap}>
         <Text style={styles.inputPrefix}>Amount</Text>
         <TextInput
@@ -192,6 +230,14 @@ export function TradePanel({
           keyboardType="decimal-pad"
           style={[styles.input, mono]}
         />
+        <View style={styles.stepperWrap}>
+          <Pressable onPress={() => adjustQty(-0.01)} style={styles.stepperBtn}>
+            <Text style={styles.stepperText}>−</Text>
+          </Pressable>
+          <Pressable onPress={() => adjustQty(0.01)} style={styles.stepperBtn}>
+            <Text style={styles.stepperText}>+</Text>
+          </Pressable>
+        </View>
         <Text style={styles.unit}>{market.base}</Text>
       </View>
 
@@ -206,10 +252,10 @@ export function TradePanel({
 
       {/* Order Estimate Summary */}
       <View style={styles.estimate}>
-        {isLimit ? (
+        {(isLimit || isStopLimit) ? (
           <>
-            <Row label="Order Value" value={`${fmt(limitTotal, 2)} ${market.quote}`} />
-            <Row label={`Est. Fee (${FEE_RATE * 100}%)`} value={`${fmt(limitTotal * FEE_RATE, 4)} ${market.quote}`} />
+            <Row label="Order Value" value={`${fmt(orderTotal, 2)} ${market.quote}`} />
+            <Row label={`Est. Fee (${FEE_RATE * 100}%)`} value={`${fmt(orderTotal * FEE_RATE, 4)} ${market.quote}`} />
           </>
         ) : (
           <>
@@ -238,7 +284,12 @@ export function TradePanel({
         ]}
       >
         <Text style={styles.submitText}>
-          {isLimit ? `Limit ${isBuy ? 'Buy' : 'Sell'}` : `Market ${isBuy ? 'Buy' : 'Sell'}`} {market.base}
+          {isStopLimit
+            ? `Stop-Limit ${isBuy ? 'Buy' : 'Sell'}`
+            : isLimit
+            ? `Limit ${isBuy ? 'Buy' : 'Sell'}`
+            : `Market ${isBuy ? 'Buy' : 'Sell'}`}{' '}
+          {market.base}
         </Text>
       </Pressable>
 
@@ -274,7 +325,7 @@ const styles = StyleSheet.create({
   },
   typeBtn: { flex: 1, paddingVertical: 6, alignItems: 'center', borderRadius: 4 },
   typeBtnActive: { backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
-  typeText: { color: colors.muted, fontSize: 12, fontWeight: '600' },
+  typeText: { color: colors.muted, fontSize: 11, fontWeight: '600' },
   typeTextActive: { color: colors.text, fontWeight: '700' },
   sideSwitch: { flexDirection: 'row', backgroundColor: colors.panelAlt, borderRadius: 6, padding: 3 },
   sideBtn: { flex: 1, paddingVertical: 8, borderRadius: 4, alignItems: 'center' },
@@ -289,10 +340,20 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
-  inputPrefix: { color: colors.muted, fontSize: 12, marginRight: 8, fontWeight: '600' },
+  inputPrefix: { color: colors.muted, fontSize: 11, marginRight: 8, fontWeight: '600', minWidth: 44 },
   input: { flex: 1, color: colors.text, fontSize: 14, paddingVertical: 8 },
+  stepperWrap: { flexDirection: 'row', gap: 4, marginRight: 6 },
+  stepperBtn: {
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  stepperText: { color: colors.text, fontSize: 12, fontWeight: '700' },
   unit: { color: colors.muted, fontWeight: '600', fontSize: 11 },
   percentRow: { flexDirection: 'row', gap: 6 },
   percentBtn: {
