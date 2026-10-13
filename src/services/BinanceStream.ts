@@ -68,7 +68,10 @@ export class BinanceStream {
     const ws = this.ws;
     this.ws = null;
     if (ws) {
+      ws.onopen = null;
       ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
       ws.close();
     }
     this.onStatus('closed');

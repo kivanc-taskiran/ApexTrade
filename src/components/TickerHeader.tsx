@@ -28,18 +28,23 @@ export const TickerHeader = memo(function TickerHeader({
   status,
   msgPerSec,
 }: Props) {
+  const prevSymbol = useRef(market.symbol);
   const prevPrice = useRef<number | null>(null);
   const direction = useRef<'up' | 'down'>('up');
 
-  if (ticker && prevPrice.current !== null && ticker.last !== prevPrice.current) {
+  if (prevSymbol.current !== market.symbol) {
+    prevSymbol.current = market.symbol;
+    prevPrice.current = null;
+  } else if (ticker && prevPrice.current !== null && ticker.last !== prevPrice.current) {
     direction.current = ticker.last > prevPrice.current ? 'up' : 'down';
   }
+
   useEffect(() => {
     prevPrice.current = ticker?.last ?? null;
   }, [ticker?.last]);
 
-  const priceColor = direction.current === 'up' ? colors.green : colors.red;
   const changeColor = (ticker?.changePct ?? 0) >= 0 ? colors.green : colors.red;
+  const priceColor = prevPrice.current === null ? changeColor : direction.current === 'up' ? colors.green : colors.red;
 
   return (
     <View style={styles.container}>

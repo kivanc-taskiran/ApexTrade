@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { FEE_RATE } from '../config';
 import { simulateFill } from '../engine/matching';
@@ -21,6 +21,11 @@ export function TradePanel({ market, book, cash, holding, onOrder }: Props) {
   const [qtyText, setQtyText] = useState('');
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
+  useEffect(() => {
+    setQtyText('');
+    setFeedback(null);
+  }, [market.symbol]);
+
   const qty = Number(qtyText.replace(',', '.')) || 0;
   const levels = side === 'buy' ? book.asks : book.bids;
   const estimate = qty > 0 ? simulateFill(levels, qty) : null;
@@ -32,8 +37,15 @@ export function TradePanel({ market, book, cash, holding, onOrder }: Props) {
     let max = 0;
     if (isBuy && bestAsk) max = cash / (bestAsk * (1 + FEE_RATE) * 1.002); // small buffer for slippage
     if (!isBuy) max = holding;
-    setQtyText(String(floorTo(max * p, market.qtyDp)));
-    setFeedback(null);
+    if (max > 0) {
+      setQtyText(String(floorTo(max * p, market.qtyDp)));
+      setFeedback(null);
+    } else {
+      setFeedback({
+        ok: false,
+        text: isBuy ? `Insufficient ${market.quote} balance` : `No ${market.base} balance to sell`,
+      });
+    }
   };
 
   const submit = () => {

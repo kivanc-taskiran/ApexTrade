@@ -11,10 +11,14 @@ interface Props {
 }
 
 export function PortfolioCard({ portfolio, prices, onReset }: Props) {
-  const holdingsValue = Object.entries(portfolio.holdings).reduce(
-    (sum, [asset, qty]) => sum + qty * (prices[asset] ?? 0),
-    0,
-  );
+  const holdingsValue = Object.entries(portfolio.holdings).reduce((sum, [asset, qty]) => {
+    let price = prices[asset];
+    if (price === undefined) {
+      const lastFill = portfolio.fills.find((f) => f.symbol.startsWith(asset));
+      price = lastFill?.avgPrice ?? 0;
+    }
+    return sum + qty * price;
+  }, 0);
   const equity = portfolio.cash + holdingsValue;
   const pnl = equity - STARTING_CASH;
   const pnlColor = pnl >= 0 ? colors.green : colors.red;
